@@ -1,0 +1,108 @@
+# Install package for geospatial data abstraction
+install.packages("rgdal")
+library("rgdal")
+
+# Import vulnerability indicator dataset (ie. the indicators that you want to form part of your PCA)
+mydata<-read.csv("ZSCORES_XY_FINAL.csv",header=TRUE,sep=",",row.names="LSOA_CODE")
+head(mydata)
+
+#Select only your GWPCA variables
+vars<-(mydata[,6:26])
+head(vars)
+
+# Import your shapefile boundaries (in my case the Lower Super Output Area Population Weighted Centroids and regional boundaries for context)
+# Remember your GWPCA needs to be carried out on a point dataset, which is why PWC are so helpful!
+LSOA<-readOGR("England_PWC.shp",verbose=FALSE)
+regions<-readOGR("REGIONS1.shp",verbose=FALSE)
+
+# Plot LSOA PWCs
+plot(LSOA, pch=20)
+
+# Generate vulnerability variable matrix using LSOA PWC X,Y coordinates
+var.matrix<-as.matrix(mydata[,6:26])
+Coords <- as.matrix(cbind(mydata$XCOO,mydata$YCOO)) 
+d1s <- SpatialPointsDataFrame(Coords,as.data.frame(mydata[,6:26]))
+
+# Install packages for GWPCA
+install.packages(c("robustbase","mvoutlier","GWmodel"))
+library("GWmodel")
+
+# Automated bandwidth selection repeated for components (k) 2-20
+bw.choice<-bw.gwpca(d1s,vars=colnames(d1s@data),k=4,adaptive=TRUE)
+bw.choice
+
+# Cross validation of bandwidths using CV scores repeated for components (k) 2-20
+sample.n<-32844
+bwd.range.adapt<-c(seq(500,sample.n,by=500)) 
+cv.score <- matrix(nrow=length(bwd.range.adapt),ncol=1)
+for(i in 1:length(bwd.range.adapt)) 
+cv.score[i]<-gwpca.cv(bwd.range.adapt[i],var.matrix,Coords,k=4,robust=F, kernel="bisquare",adaptive=TRUE,p=2,theta=0,longlat=F)
+X11(width=6,height=6) 
+
+#Plot your cv.scores
+plot(bwd.range.adapt,cv.score,ylab="",xlab="",cex=1,pch=19) 
+title(ylab = list("CV score", cex=1.25, col="black", font=1)) 
+title(xlab = list("No. of nearest neighbours", cex=1.25, col="black", font=1))  
+title(main = list("GW PCA: Bandwidth function", cex=1.5, col="black", font=1))
+
+# Generate histogram for optimal bandwidth
+cv.score.data.opt<-gwpca.cv.contrib(var.matrix,Coords,bw=1052,k=4,robust=F,adaptive=TRUE,p=2,theta=0,longlat=F)
+X11(width=6,height=6)
+hist(cv.score.data.opt,ylab="",xlab="",main="")
+title(ylab = list("Frequency", cex=1.25, col="black", font=1))
+title(xlab = list("CV score data", cex=1.25, col="black", font=1))
+title(main = list("GW PCA: CV score data for a bandwidth of 1052",
+cex=1.5, col="black", font=1))
+
+# Now carry out your GWPCA
+gw.pca <- gwpca(d1s,vars=colnames(d1s@data),bw=bw.choice,k=21,adaptive=TRUE)
+head(gw.pca)
+
+# Extract data about lead items that have the highest loadings on the first component for each LSOA PWC
+local.loadings<-gw.pca$loadings[,,1]
+head(local.loadings)
+lead.item<-colnames(local.loadings)[max.col(abs(local.loadings))]
+head(lead.item)
+df1p=SpatialPointsDataFrame(Coords,data.frame(lead=lead.item))
+head(df1p)
+
+# Install colour scheme packages
+install.packages("colorRamps")
+library("colorRamps")
+
+# Map lead items for component 1 with a categorical legend
+colour<-primary.colors(20,no.white=TRUE)[match(df1p$lead,unique(df1p$lead))]
+plot(df1p,pch=20,col=colour,add=TRUE)
+legend('topleft',as.character(unique(df1p$lead)),pch=20,col=primary.colors(20,no.white=TRUE))
+
+# Install alternative colour scheme package 
+install.packages("RColorBrewer")
+library("RColorBrewer")
+
+# Calculate proportion variance from your GWPCA
+prop.var<-function(gwpca.obj,n.components)
+{return(rowSums(gwpca.obj$var[,1:n.components])/rowSums(gwpca.obj$var))}
+props<-prop.var(gw.pca,4)
+summary(props)
+
+# Map percentage total variance for LSOA PWC with a legend
+interval <- cut(props,c(0.6,0.65,0.7,0.75,0.8,0.85),labels=FALSE)
+df1v = SpatialPointsDataFrame(Coords, data.frame(int=interval))
+colour <- brewer.pal(6,"Blues")[-1][interval]
+plot(df1v,pch=20,col=colour,add=TRUE)
+interval.labels <- c("0.6 - 0.65","0.65 - 0.7","0.7 - 0.75","0.75 - 0.8","0.8 - 0.85")
+legend('topleft',interval.labels,pch=18,col=brewer.pal(6,"Blues")[-1])
+
+# Plot region boundaries
+plot(regions, add=TRUE)
+
+# Export your final GWPCA dataset
+write.csv(gw.pca,file="GWPCA.csv")
+
+
+
+
+
+
+
+
